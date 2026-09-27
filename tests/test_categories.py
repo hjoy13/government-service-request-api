@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from apps.service_requests.models import ServiceRequest
 
 from apps.categories.models import Category
 
@@ -148,3 +149,18 @@ class CategoryAPITests(APITestCase):
         response = self.client.delete(self.detail_url(self.active))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(Category.objects.filter(pk=self.active.pk).exists())
+
+    def test_admin_cannot_delete_category_in_use(self):
+            ServiceRequest.objects.create(
+                category=self.active,
+                title="Pothole",
+                description="Large pothole near school",
+                created_by=self.citizen,
+            )
+            self.client.force_authenticate(self.admin)
+
+            response = self.client.delete(self.detail_url(self.active))
+
+            self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+            self.assertIn("is_active", str(response.data["detail"]))
+            self.assertTrue(Category.objects.filter(pk=self.active.pk).exists())    
