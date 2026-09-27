@@ -180,3 +180,141 @@ class ServiceRequestVisibilityTests(ServiceRequestTestBase):
         self.assertEqual(put.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertEqual(delete.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         self.assertTrue(ServiceRequest.objects.filter(pk=self.r1.pk).exists())
+
+class ServiceRequestUpdateTests(ServiceRequestTestBase):
+    def patch(self, user, service_request, data):
+        self.client.force_authenticate(user)
+        return self.client.patch(self.detail_url(service_request), data, format="json")
+
+    # --- citizen ----------------------------------------------------------
+
+    def test_citizen_can_edit_content_of_own_open_request(self):
+        electricity = Category.objects.create(name="Electricity")
+
+        response = self.patch(self.citizen1, self.r1, {
+            "title": "Deep pothole", "description": "Getting worse", "category": electricity.pk,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.r1.refresh_from_db()
+        self.assertEqual(self.r1.title, "Deep pothole")
+        self.assertEqual(self.r1.description, "Getting worse")
+        self.assertEqual(self.r1.category, electricity)
+
+    def test_citizen_cannot_edit_after_processing_started(self):
+        ServiceRequest.objects.filter(pk=self.r1.pk).update(status=ServiceRequest.Status.IN_PROGRESS)
+
+        response = self.patch(self.citizen1, self.r1, {"title": "Changed"})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.r1.refresh_from_db()
+        self.assertEqual(self.r1.title, "Pothole")
+
+    def test_citizen_cannot_change_staff_or_system_fields(self):
+        attempts = {
+            "status": ServiceRequest.Status.RESOLVED,
+            "priority": ServiceRequest.Priority.URGENT,
+            "assigned_to": self.officer2.pk,
+            "created_by": self.citizen2.pk,
+        }
+        for field, value in attempts.items():
+            with self.subTest(field=field):
+                response = self.patch(self.citizen1, self.r1, {field: value})
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(field, response.data)
+        self.r1.refresh_from_db()
+        self.assertEqual(self.r1.status, ServiceRequest.Status.OPEN)
+        self.assertEqual(self.r1.priority, ServiceRequest.Priority.MEDIUM)
+        self.assertEqual(self.r1.assigned_to, self.officer1)
+        self.assertEqual(self.r1.created_by, self.citizen1)
+
+    def test_citizen_cannot_move_request_to_inactive_category(self):
+        response = self.patch(self.citizen1, self.r1, {"category": self.water.pk})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("category", response.data)
+
+    def test_citizen_cannot_patch_another_citizens_request(self):
+        response = self.patch(self.citizen1, self.r2, {"title": "Hijacked"})
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.r2.refresh_from_db()
+        self.assertEqual(self.r2.title, "Broken streetlight")
+
+    # --- officer ----------------------------------------------------------
+
+    def test_officer_can_update_status_and_priority_of_assigned_request(self):
+        response = self.patch(self.officer1, self.r1, {
+            "status": ServiceRequest.Status.IN_PROGRESS,
+            "priority": ServiceRequest.Priority.URGENT,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.r1.refresh_from_db()
+        self.assertEqual(self.r1.status, ServiceRequest.Status.IN_PROGRESS)
+        self.assertEqual(self.r1.priority, ServiceRequest.Priority.URGENT)
+
+    def test_officer_cannot_edit_content_or_assignment(self):
+        attempts = {
+            "title": "Officer rewrite",
+            "description": "Officer rewrite",
+            "category": self.roads.pk,
+            "assigned_to": self.officer2.pk,
+        }
+        for field, value in attempts.items():
+            with self.subTest(field=field):
+                response = self.patch(self.officer1, self.r1, {field: value})
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(field, response.data)
+        self.r1.refresh_from_db()
+        self.assertEqual(self.r1.title, "Pothole")
+        self.assertEqual(self.r1.assigned_to, self.officer1)
+
+    def test_officer_cannot_patch_other_or_unassigned_requests(self):
+        for other in (self.r2, self.r3):
+            with self.subTest(request=other.title):
+                response = self.patch(
+                    self.officer1, other, {"status": ServiceRequest.Status.RESOLVED}
+                )
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+                other.refresh_from_db()
+                self.assertEqual(other.status, ServiceRequest.Status.OPEN)
+
+    # --- admin ------------------------------------------------------------
+
+    def test_admin_can_update_status_and_priority_of_any_request(self):
+        response = self.patch(self.admin, self.r2, {
+            "status": ServiceRequest.Status.RESOLVED,
+            "priority": ServiceRequest.Priority.LOW,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.r2.refresh_from_db()
+        self.assertEqual(self.r2.status, ServiceRequest.Status.RESOLVED)
+        self.assertEqual(self.r2.priority, ServiceRequest.Priority.LOW)
+
+    def test_admin_cannot_edit_content_or_system_fields(self):
+        attempts = {
+            "title": "Admin rewrite",
+            "assigned_to": self.officer2.pk,
+            "created_by": self.citizen2.pk,
+        }
+        for field, value in attempts.items():
+            with self.subTest(field=field):
+                response = self.patch(self.admin, self.r1, {field: value})
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(field, response.data)
+
+    # --- status values ----------------------------------------------------
+
+    def test_invalid_status_value_is_rejected(self):
+        response = self.patch(self.officer1, self.r1, {"status": "DONE"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("status", response.data)
+
+    def test_status_can_move_in_any_direction(self):
+        ServiceRequest.objects.filter(pk=self.r1.pk).update(status=ServiceRequest.Status.RESOLVED)
+
+        response = self.patch(self.officer1, self.r1, {"status": ServiceRequest.Status.OPEN})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.r1.refresh_from_db()
+        self.assertEqual(self.r1.status, ServiceRequest.Status.OPEN)

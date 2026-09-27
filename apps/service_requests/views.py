@@ -9,10 +9,12 @@ class ServiceRequestViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
     serializer_class = ServiceRequestSerializer
     permission_classes = (ServiceRequestPermission,)
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
         user = self.request.user

@@ -4,6 +4,17 @@ from .models import ServiceRequest
 
 RESTRICTED_CREATE_FIELDS = {"status", "assigned_to", "created_by"}
 
+CITIZEN_EDITABLE_FIELDS = {"title", "description", "category"}
+STAFF_EDITABLE_FIELDS = {"status", "priority"}
+
+
+def editable_fields_for(user):
+    if getattr(user, "is_citizen", False):
+        return CITIZEN_EDITABLE_FIELDS
+    if getattr(user, "is_officer", False) or getattr(user, "is_admin_role", False):
+        return STAFF_EDITABLE_FIELDS
+    return set()
+
 
 class ServiceRequestSerializer(serializers.ModelSerializer):
     class Meta:
@@ -12,9 +23,7 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             "id", "category", "title", "description", "priority", "status",
             "created_by", "assigned_to", "created_at", "updated_at",
         )
-        read_only_fields = (
-            "id", "status", "created_by", "assigned_to", "created_at", "updated_at",
-        )
+        read_only_fields = ("id", "created_by", "assigned_to", "created_at", "updated_at")
 
     def validate_category(self, value):
         if not value.is_active:
@@ -23,10 +32,29 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if self.instance is None:
-            restricted = RESTRICTED_CREATE_FIELDS.intersection(self.initial_data)
-            if restricted:
-                raise serializers.ValidationError(
-                    {field: "This field is set by the system and cannot be provided."
-                     for field in sorted(restricted)}
-                )
+            self._validate_create()
+        else:
+            self._validate_update()
         return attrs
+
+    def _validate_create(self):
+        restricted = RESTRICTED_CREATE_FIELDS.intersection(self.initial_data)
+        if restricted:
+            raise serializers.ValidationError(
+                {field: "This field is set by the system and cannot be provided."
+                 for field in sorted(restricted)}
+            )
+
+    def _validate_update(self):
+        user = self.context["request"].user
+        forbidden = set(self.initial_data) - editable_fields_for(user)
+        if forbidden:
+            raise serializers.ValidationError(
+                {field: "You are not allowed to change this field."
+                 for field in sorted(forbidden)}
+            )
+
+        if getattr(user, "is_citizen", False) and self.instance.status != ServiceRequest.Status.OPEN:
+            raise serializers.ValidationError(
+                "This request can only be edited while its status is OPEN."
+            )
