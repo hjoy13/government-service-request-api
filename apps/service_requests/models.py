@@ -1,8 +1,17 @@
+import os
+import uuid
 from django.conf import settings
 from django.db import models
 
 from apps.accounts.models import User
 
+
+from .validators import validate_attachment_extension, validate_attachment_size
+
+
+def attachment_upload_to(instance, filename):
+    ext = os.path.splitext(filename)[1].lower()
+    return f"service_requests/{uuid.uuid4().hex}{ext}"
 
 class Priority(models.TextChoices):
     LOW = "LOW", "Low"
@@ -44,6 +53,11 @@ class ServiceRequest(models.Model):
         blank=True,
         related_name="service_requests_assigned",
         limit_choices_to={"role": User.Role.OFFICER},
+    )
+    attachment = models.FileField(
+        upload_to=attachment_upload_to,
+        blank=True,
+        validators=[validate_attachment_extension, validate_attachment_size],
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

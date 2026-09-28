@@ -7,7 +7,7 @@ User = get_user_model()
 
 RESTRICTED_CREATE_FIELDS = {"status", "assigned_to", "created_by"}
 
-CITIZEN_EDITABLE_FIELDS = {"title", "description", "category"}
+CITIZEN_EDITABLE_FIELDS = {"title", "description", "category", "attachment"}
 STAFF_EDITABLE_FIELDS = {"status", "priority"}
 
 
@@ -20,13 +20,20 @@ def editable_fields_for(user):
 
 
 class ServiceRequestSerializer(serializers.ModelSerializer):
+    has_attachment = serializers.SerializerMethodField()
+
     class Meta:
         model = ServiceRequest
         fields = (
             "id", "category", "title", "description", "priority", "status",
-            "created_by", "assigned_to", "created_at", "updated_at",
+            "created_by", "assigned_to", "attachment", "has_attachment",
+            "created_at", "updated_at",
         )
         read_only_fields = ("id", "created_by", "assigned_to", "created_at", "updated_at")
+        extra_kwargs = {"attachment": {"write_only": True}}
+
+    def get_has_attachment(self, obj) -> bool:
+        return bool(obj.attachment)
 
     def validate_category(self, value):
         if not value.is_active:

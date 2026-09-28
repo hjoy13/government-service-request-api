@@ -6,6 +6,10 @@ from .serializers import ServiceRequestSerializer, AssignOfficerSerializer, Comm
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from django.http import FileResponse
+from rest_framework.exceptions import NotFound
+import os
+
 from apps.accounts.permissions import IsAdminRole
 
 class ServiceRequestViewSet(
@@ -60,3 +64,21 @@ class ServiceRequestViewSet(
 
         comments = service_request.comments.all()
         return Response(CommentSerializer(comments, many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def attachment(self, request, pk=None):
+        service_request = self.get_object()
+
+        if not service_request.attachment:
+            raise NotFound("This request has no attachment.")
+
+        try:
+            file_handle = service_request.attachment.open("rb")
+        except FileNotFoundError:
+            raise NotFound("The attachment file is missing.")
+
+        return FileResponse(
+            file_handle,
+            as_attachment=True,
+            filename=os.path.basename(service_request.attachment.name),
+        )
