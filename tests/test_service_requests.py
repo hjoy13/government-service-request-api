@@ -3,9 +3,11 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework import status
+from datetime import timedelta
+from django.utils import timezone
 
 from apps.categories.models import Category
-from apps.service_requests.models import ServiceRequest, Status
+from apps.service_requests.models import ServiceRequest, Status, Comment
 
 User = get_user_model()
 
@@ -439,3 +441,114 @@ class ServiceRequestAssignTests(APITestCase):
         self.client.force_authenticate(self.admin)
         response = self.client.get(self.assign_url(self.unassigned.pk))
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+class ServiceRequestCommentTests(APITestCase):
+    @classmethod
+    def setUpTestData(cls):
+        def make(username, role):
+            return User.objects.create_user(
+                username=username, email=f"{username}@example.com", role=role
+            )
+
+        cls.admin = make("cmt_admin", User.Role.ADMIN)
+        cls.citizen = make("cmt_citizen", User.Role.CITIZEN)
+        cls.other_citizen = make("cmt_other_citizen", User.Role.CITIZEN)
+        cls.officer = make("cmt_officer", User.Role.OFFICER)
+        cls.other_officer = make("cmt_other_officer", User.Role.OFFICER)
+
+        cls.category = Category.objects.create(name="Comment Test Category")
+        cls.request_obj = ServiceRequest.objects.create(
+            category=cls.category, title="Streetlight out", description="d",
+            created_by=cls.citizen, assigned_to=cls.officer,
+        )
+        cls.other_request = ServiceRequest.objects.create(
+            category=cls.category, title="Other", description="d",
+            created_by=cls.other_citizen,
+        )
+
+    def url(self, pk=None):
+        return f"/api/v1/requests/{pk or self.request_obj.pk}/comments/"
+
+    def post_comment(self, user, text="Any update?"):
+        self.client.force_authenticate(user)
+        return self.client.post(self.url(), {"text": text}, format="json")
+
+    def test_citizen_comments_on_own_request(self):
+        response = self.post_comment(self.citizen)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["author"], self.citizen.pk)
+        self.assertEqual(response.data["service_request"], self.request_obj.pk)
+        comment = Comment.objects.get(pk=response.data["id"])
+        self.assertEqual(comment.author, self.citizen)
+        self.assertEqual(comment.service_request, self.request_obj)
+
+    def test_assigned_officer_can_comment(self):
+        response = self.post_comment(self.officer)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["author"], self.officer.pk)
+
+    def test_admin_can_comment_on_any_request(self):
+        response = self.post_comment(self.admin)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_out_of_scope_users_get_404_and_nothing_is_written(self):
+        for label, user in {"other citizen": self.other_citizen, "other officer": self.other_officer}.items():
+            with self.subTest(label):
+                self.client.force_authenticate(user)
+                self.assertEqual(self.client.get(self.url()).status_code, status.HTTP_404_NOT_FOUND)
+                response = self.client.post(self.url(), {"text": "sneaky"}, format="json")
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(Comment.objects.count(), 0)
+
+    def test_list_is_oldest_first_and_scoped_to_the_request(self):
+        now = timezone.now()
+        newer = Comment.objects.create(service_request=self.request_obj, author=self.officer, text="newer")
+        older = Comment.objects.create(service_request=self.request_obj, author=self.citizen, text="older")
+        Comment.objects.filter(pk=newer.pk).update(created_at=now)
+        Comment.objects.filter(pk=older.pk).update(created_at=now - timedelta(minutes=5))
+        Comment.objects.create(service_request=self.other_request, author=self.other_citizen, text="elsewhere")
+
+        self.client.force_authenticate(self.citizen)
+        response = self.client.get(self.url())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([c["text"] for c in response.data], ["older", "newer"])
+
+    def test_server_owned_fields_in_body_rejected(self):
+        self.client.force_authenticate(self.citizen)
+        for field, value in {
+            "author": self.admin.pk,
+            "service_request": self.other_request.pk,
+            "id": 999,
+            "created_at": "2020-01-01T00:00:00Z",
+        }.items():
+            with self.subTest(field):
+                response = self.client.post(self.url(), {"text": "hi", field: value}, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(field, response.data)
+        self.assertEqual(Comment.objects.count(), 0)
+
+    def test_invalid_text_rejected(self):
+        self.client.force_authenticate(self.citizen)
+        for label, body in {
+            "missing": {},
+            "blank": {"text": ""},
+            "whitespace": {"text": "   "},
+            "too long": {"text": "x" * 2001},
+        }.items():
+            with self.subTest(label):
+                response = self.client.post(self.url(), body, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("text", response.data)
+        self.assertEqual(Comment.objects.count(), 0)
+
+    def test_anonymous_gets_401(self):
+        self.assertEqual(self.client.get(self.url()).status_code, status.HTTP_401_UNAUTHORIZED)
+        response = self.client.post(self.url(), {"text": "hi"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_comments_cannot_be_edited_or_deleted(self):
+        self.client.force_authenticate(self.admin)
+        for method in ("put", "patch", "delete"):
+            with self.subTest(method):
+                response = getattr(self.client, method)(self.url(), {"text": "x"}, format="json")
+                self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)        

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import ServiceRequest
+from .models import ServiceRequest, Comment
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -70,3 +70,21 @@ class AssignOfficerSerializer(serializers.Serializer):
             "incorrect_type": "officer_id must be an integer.",
         },
     )        
+
+class CommentSerializer(serializers.ModelSerializer):
+    WRITABLE_FIELDS = {"text"}
+
+    text = serializers.CharField(max_length=2000)
+
+    class Meta:
+        model = Comment
+        fields = ["id", "service_request", "author", "text", "created_at"]
+        read_only_fields = ["id", "service_request", "author", "created_at"]
+
+    def validate(self, attrs):
+        unexpected = set(self.initial_data) - self.WRITABLE_FIELDS
+        if unexpected:
+            raise serializers.ValidationError(
+                {field: "This field cannot be set." for field in sorted(unexpected)}
+            )
+        return attrs

@@ -1,8 +1,8 @@
-from rest_framework import mixins, viewsets
+from rest_framework import mixins, viewsets, status
 
 from .models import ServiceRequest
 from .permissions import ServiceRequestPermission
-from .serializers import ServiceRequestSerializer, AssignOfficerSerializer
+from .serializers import ServiceRequestSerializer, AssignOfficerSerializer, CommentSerializer
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -48,3 +48,15 @@ class ServiceRequestViewSet(
             service_request, context=self.get_serializer_context()
         )
         return Response(output.data)    
+    @action(detail=True, methods=["get", "post"])
+    def comments(self, request, pk=None):
+        service_request = self.get_object()
+
+        if request.method == "POST":
+            serializer = CommentSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(service_request=service_request, author=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        comments = service_request.comments.all()
+        return Response(CommentSerializer(comments, many=True).data)

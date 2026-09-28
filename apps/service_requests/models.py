@@ -63,3 +63,19 @@ class ServiceRequest(models.Model):
 
     def __str__(self):
         return f"#{self.pk} {self.title}"
+
+class Comment(models.Model):
+    service_request = models.ForeignKey(
+        ServiceRequest, on_delete=models.CASCADE, related_name="comments"
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="comments"
+    )
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Comment {self.pk} on request {self.service_request_id}"    
