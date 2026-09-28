@@ -47,7 +47,7 @@ class ServiceRequestTestBase(APITestCase):
 
     @staticmethod
     def ids(response):
-        return {item["id"] for item in response.data}
+        return {item["id"] for item in response.data["results"]}
 
     def valid_payload(self, **overrides):
         data = {

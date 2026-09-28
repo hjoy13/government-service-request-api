@@ -21,6 +21,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter
 
 from .filters import ServiceRequestFilter, ServiceRequestOrderingFilter
+from .pagination import ServiceRequestPagination
+
 
 class ServiceRequestViewSet(
     mixins.CreateModelMixin,
@@ -38,6 +40,7 @@ class ServiceRequestViewSet(
     search_fields = ("title", "description")
     ordering_fields = ("created_at", "updated_at", "priority")
     ordering = ("-created_at",)
+    pagination_class = ServiceRequestPagination
 
     def get_queryset(self):
         user = self.request.user
