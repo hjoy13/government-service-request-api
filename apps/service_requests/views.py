@@ -2,7 +2,7 @@ from rest_framework import mixins, viewsets, status
 
 from .models import ServiceRequest
 from .permissions import ServiceRequestPermission
-from .serializers import ServiceRequestSerializer, AssignOfficerSerializer, CommentSerializer
+from .serializers import ServiceRequestSerializer, ServiceRequestCreateSerializer, AssignOfficerSerializer, CommentSerializer
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -22,6 +22,27 @@ from rest_framework.filters import SearchFilter
 
 from .filters import ServiceRequestFilter, ServiceRequestOrderingFilter
 from .pagination import ServiceRequestPagination
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
+
+
+
+
+@extend_schema_view(
+    create=extend_schema(
+        summary="Create a service request (CITIZEN only)",
+        description=(
+            "Status starts as OPEN, the creator is the authenticated citizen, and no "
+            "officer is assigned; these fields are set by the system and are rejected "
+            "if sent. Use multipart/form-data to include an attachment "
+            "(pdf, jpg, jpeg, png; max 5 MB)."
+        ),
+        request=ServiceRequestCreateSerializer,
+        responses={201: ServiceRequestSerializer},
+    )
+)
 
 
 class ServiceRequestViewSet(
@@ -57,6 +78,12 @@ class ServiceRequestViewSet(
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
+    @extend_schema(
+        summary="Assign or reassign an officer (ADMIN only)",
+        request=AssignOfficerSerializer,
+        responses={200: ServiceRequestSerializer},
+    )    
+
     @action(detail=True, methods=["post"], permission_classes=[IsAdminRole])
     def assign(self, request, pk=None):
         service_request = self.get_object()
@@ -71,7 +98,21 @@ class ServiceRequestViewSet(
             service_request, context=self.get_serializer_context()
         )
         return Response(output.data)    
-    @action(detail=True, methods=["get", "post"])
+
+    @extend_schema(
+        methods=["GET"],
+        summary="List comments on a request",
+        responses={200: CommentSerializer(many=True)},
+    )
+        
+    @extend_schema(
+        methods=["POST"],
+        summary="Add a comment to a request",
+        request=CommentSerializer,
+        responses={201: CommentSerializer},
+    )
+    
+    @action(detail=True, methods=["get", "post"], pagination_class=None, filter_backends=[])
     def comments(self, request, pk=None):
         service_request = self.get_object()
 
@@ -83,6 +124,16 @@ class ServiceRequestViewSet(
 
         comments = service_request.comments.all()
         return Response(CommentSerializer(comments, many=True).data)
+
+    @extend_schema(
+        summary="Download the request's attachment",
+        description=(
+            "Streams the stored file as a download (Content-Disposition: attachment). "
+            "Access follows request visibility: owner, assigned officer, or admin; "
+            "anyone else gets 404. Returns 404 if the request has no attachment."
+        ),
+        responses={(200, "*/*"): OpenApiTypes.BINARY},
+    )
 
     @action(detail=True, methods=["get"])
     def attachment(self, request, pk=None):
@@ -104,6 +155,35 @@ class ServiceRequestViewSet(
 
 class StatisticsView(APIView):
     permission_classes = (IsAdminRole,)
+
+    @extend_schema(
+        summary="Request statistics (ADMIN only)",
+        responses=inline_serializer(
+            name="Statistics",
+            fields={
+                "total_requests": serializers.IntegerField(),
+                "by_status": inline_serializer(
+                    name="StatusCounts",
+                    fields={v.lower(): serializers.IntegerField() for v in Status.values},
+                ),
+                "by_priority": inline_serializer(
+                    name="PriorityCounts",
+                    fields={v.lower(): serializers.IntegerField() for v in Priority.values},
+                ),
+                "unassigned": serializers.IntegerField(),
+                "by_category": serializers.ListField(
+                    child=inline_serializer(
+                        name="CategoryCount",
+                        fields={
+                            "id": serializers.IntegerField(),
+                            "name": serializers.CharField(),
+                            "count": serializers.IntegerField(),
+                        },
+                    )
+                ),
+            },
+        ),
+    )
 
     def get(self, request):
         aggregates = {

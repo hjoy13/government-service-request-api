@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'apps.categories',
     'apps.service_requests',
     'django_filters',
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -149,6 +150,15 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Government Service Request API",
+    "DESCRIPTION": "Citizens submit service requests; officers process assigned requests; admins manage the system.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
 }
 
 SIMPLE_JWT = {

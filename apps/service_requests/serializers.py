@@ -95,3 +95,15 @@ class CommentSerializer(serializers.ModelSerializer):
                 {field: "This field cannot be set." for field in sorted(unexpected)}
             )
         return attrs
+
+class ServiceRequestCreateSerializer(serializers.ModelSerializer):
+    """Documentation only: the fields a citizen may send when creating a request.
+
+    The real create logic still runs through ServiceRequestSerializer; this class
+    exists so the OpenAPI schema does not advertise server-owned fields (status,
+    assigned_to, created_by) as create inputs.
+    """
+
+    class Meta:
+        model = ServiceRequest
+        fields = ("category", "title", "description", "priority", "attachment")    
