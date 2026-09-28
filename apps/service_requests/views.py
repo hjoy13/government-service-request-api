@@ -2,8 +2,11 @@ from rest_framework import mixins, viewsets
 
 from .models import ServiceRequest
 from .permissions import ServiceRequestPermission
-from .serializers import ServiceRequestSerializer
+from .serializers import ServiceRequestSerializer, AssignOfficerSerializer
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
+from apps.accounts.permissions import IsAdminRole
 
 class ServiceRequestViewSet(
     mixins.CreateModelMixin,
@@ -30,3 +33,18 @@ class ServiceRequestViewSet(
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAdminRole])
+    def assign(self, request, pk=None):
+        service_request = self.get_object()
+
+        input_serializer = AssignOfficerSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        service_request.assigned_to = input_serializer.validated_data["officer_id"]
+        service_request.save(update_fields=["assigned_to", "updated_at"])
+
+        output = ServiceRequestSerializer(
+            service_request, context=self.get_serializer_context()
+        )
+        return Response(output.data)    

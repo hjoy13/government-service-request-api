@@ -2,9 +2,10 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework import status
 
 from apps.categories.models import Category
-from apps.service_requests.models import ServiceRequest
+from apps.service_requests.models import ServiceRequest, Status
 
 User = get_user_model()
 
@@ -318,3 +319,123 @@ class ServiceRequestUpdateTests(ServiceRequestTestBase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.r1.refresh_from_db()
         self.assertEqual(self.r1.status, ServiceRequest.Status.OPEN)
+
+class ServiceRequestAssignTests(APITestCase):
+    
+
+    @classmethod
+    def setUpTestData(cls):
+        def make(username, role, **extra):
+            return User.objects.create_user(
+                username=username, email=f"{username}@example.com", role=role, **extra
+            )
+
+        cls.admin = make("asg_admin", User.Role.ADMIN)
+        cls.citizen = make("asg_citizen", User.Role.CITIZEN)
+        cls.officer1 = make("asg_officer1", User.Role.OFFICER)
+        cls.officer2 = make("asg_officer2", User.Role.OFFICER)
+        cls.inactive_officer = make("asg_officer_off", User.Role.OFFICER, is_active=False)
+
+        cls.category = Category.objects.create(name="Assign Test Category")
+
+        cls.unassigned = ServiceRequest.objects.create(
+            category=cls.category, title="Unassigned", description="d",
+            created_by=cls.citizen,
+        )
+        cls.assigned = ServiceRequest.objects.create(
+            category=cls.category, title="Assigned", description="d",
+            created_by=cls.citizen, assigned_to=cls.officer1,
+            status=Status.IN_PROGRESS,
+        )
+
+    def assign_url(self, pk):
+        return f"/api/v1/requests/{pk}/assign/"
+
+    def test_admin_assigns_officer_to_unassigned_request(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post(
+            self.assign_url(self.unassigned.pk), {"officer_id": self.officer1.pk}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["assigned_to"], self.officer1.pk)
+        self.unassigned.refresh_from_db()
+        self.assertEqual(self.unassigned.assigned_to, self.officer1)
+
+    def test_admin_reassigns_to_another_officer(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post(
+            self.assign_url(self.assigned.pk), {"officer_id": self.officer2.pk}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assigned.refresh_from_db()
+        self.assertEqual(self.assigned.assigned_to, self.officer2)
+
+    def test_assignment_does_not_change_status(self):
+        self.client.force_authenticate(self.admin)
+        self.client.post(
+            self.assign_url(self.assigned.pk), {"officer_id": self.officer2.pk}, format="json"
+        )
+        self.assigned.refresh_from_db()
+        self.assertEqual(self.assigned.status, Status.IN_PROGRESS)
+
+    def test_reassignment_moves_visibility_between_officers(self):
+        self.client.force_authenticate(self.admin)
+        self.client.post(
+            self.assign_url(self.assigned.pk), {"officer_id": self.officer2.pk}, format="json"
+        )
+        detail = f"/api/v1/requests/{self.assigned.pk}/"
+
+        self.client.force_authenticate(self.officer2)
+        self.assertEqual(self.client.get(detail).status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(self.officer1)
+        self.assertEqual(self.client.get(detail).status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invalid_assignment_targets_rejected(self):
+        self.client.force_authenticate(self.admin)
+        cases = {
+            "citizen": {"officer_id": self.citizen.pk},
+            "admin": {"officer_id": self.admin.pk},
+            "inactive officer": {"officer_id": self.inactive_officer.pk},
+            "nonexistent": {"officer_id": 999999},
+            "non-integer": {"officer_id": "abc"},
+            "missing": {},
+        }
+        for label, body in cases.items():
+            with self.subTest(label):
+                response = self.client.post(
+                    self.assign_url(self.unassigned.pk), body, format="json"
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("officer_id", response.data)
+                self.unassigned.refresh_from_db()
+                self.assertIsNone(self.unassigned.assigned_to)
+
+    def test_non_admin_roles_cannot_assign(self):
+        for label, user in {"citizen": self.citizen, "officer": self.officer1}.items():
+            with self.subTest(label):
+                self.client.force_authenticate(user)
+                response = self.client.post(
+                    self.assign_url(self.assigned.pk), {"officer_id": self.officer2.pk}, format="json"
+                )
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+                self.assigned.refresh_from_db()
+                self.assertEqual(self.assigned.assigned_to, self.officer1)
+
+    def test_anonymous_cannot_assign(self):
+        response = self.client.post(
+            self.assign_url(self.unassigned.pk), {"officer_id": self.officer1.pk}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_assign_nonexistent_request_returns_404(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post(
+            self.assign_url(999999), {"officer_id": self.officer1.pk}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_get_on_assign_not_allowed(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.get(self.assign_url(self.unassigned.pk))
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)

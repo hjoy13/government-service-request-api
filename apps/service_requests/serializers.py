@@ -1,6 +1,9 @@
 from rest_framework import serializers
 
 from .models import ServiceRequest
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
 
 RESTRICTED_CREATE_FIELDS = {"status", "assigned_to", "created_by"}
 
@@ -58,3 +61,12 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "This request can only be edited while its status is OPEN."
             )
+
+class AssignOfficerSerializer(serializers.Serializer):
+    officer_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(role=User.Role.OFFICER, is_active=True),
+        error_messages={
+            "does_not_exist": "No active officer with id {pk_value}.",
+            "incorrect_type": "officer_id must be an integer.",
+        },
+    )        
