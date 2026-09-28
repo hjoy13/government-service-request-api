@@ -12,6 +12,12 @@ import os
 
 from apps.accounts.permissions import IsAdminRole
 
+from django.db.models import Count, Q
+from rest_framework.views import APIView
+
+from apps.categories.models import Category
+from .models import Priority, Status
+
 class ServiceRequestViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
@@ -82,3 +88,32 @@ class ServiceRequestViewSet(
             as_attachment=True,
             filename=os.path.basename(service_request.attachment.name),
         )
+
+class StatisticsView(APIView):
+    permission_classes = (IsAdminRole,)
+
+    def get(self, request):
+        aggregates = {
+            "total": Count("id"),
+            "unassigned": Count("id", filter=Q(assigned_to__isnull=True)),
+        }
+        for value in Status.values:
+            aggregates[f"status_{value}"] = Count("id", filter=Q(status=value))
+        for value in Priority.values:
+            aggregates[f"priority_{value}"] = Count("id", filter=Q(priority=value))
+
+        counts = ServiceRequest.objects.aggregate(**aggregates)
+
+        by_category = (
+            Category.objects.annotate(count=Count("service_requests"))
+            .order_by("name")
+            .values("id", "name", "count")
+        )
+
+        return Response({
+            "total_requests": counts["total"],
+            "by_status": {v.lower(): counts[f"status_{v}"] for v in Status.values},
+            "by_priority": {v.lower(): counts[f"priority_{v}"] for v in Priority.values},
+            "unassigned": counts["unassigned"],
+            "by_category": list(by_category),
+        })    
