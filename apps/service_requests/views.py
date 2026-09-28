@@ -17,6 +17,10 @@ from rest_framework.views import APIView
 
 from apps.categories.models import Category
 from .models import Priority, Status
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter
+
+from .filters import ServiceRequestFilter, ServiceRequestOrderingFilter
 
 class ServiceRequestViewSet(
     mixins.CreateModelMixin,
@@ -28,6 +32,12 @@ class ServiceRequestViewSet(
     serializer_class = ServiceRequestSerializer
     permission_classes = (ServiceRequestPermission,)
     http_method_names = ["get", "post", "patch", "head", "options"]
+
+    filter_backends = (DjangoFilterBackend, SearchFilter, ServiceRequestOrderingFilter)
+    filterset_class = ServiceRequestFilter
+    search_fields = ("title", "description")
+    ordering_fields = ("created_at", "updated_at", "priority")
+    ordering = ("-created_at",)
 
     def get_queryset(self):
         user = self.request.user

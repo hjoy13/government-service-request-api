@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'apps.categories',
     'apps.service_requests',
+    'django_filters',
 ]
 
 MIDDLEWARE = [
