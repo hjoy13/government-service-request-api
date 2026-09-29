@@ -23,6 +23,7 @@ The system supports three application roles:
 - [File Attachments](#file-attachments)
 - [Admin Statistics](#admin-statistics)
 - [Swagger and OpenAPI](#swagger-and-openapi)
+- [Rate Limiting](#rate-limiting)
 - [Environment Variables](#environment-variables)
 - [Docker Quick Start](#docker-quick-start)
 - [Local Development Setup](#local-development-setup)
@@ -30,6 +31,7 @@ The system supports three application roles:
 - [Running Tests](#running-tests)
 - [Repository Structure](#repository-structure)
 - [Design Decisions](#design-decisions)
+- [Bonus Features](#bonus-features)
 - [Known Limitations](#known-limitations)
 - [Verification Status](#verification-status)
 
@@ -41,7 +43,7 @@ The system supports three application roles:
 
 - JWT-based authentication.
 - Public citizen registration.
-- JWT access and refresh tokens.
+- JWT access and refresh tokens (access token: 30 minutes, refresh token: 1 day).
 - Custom Django user model with:
   - `CITIZEN`
   - `OFFICER`
@@ -54,6 +56,7 @@ The system supports three application roles:
   - `is_active`
 - Email addresses are normalized and enforced as unique case-insensitively.
 - Django password validators are applied.
+- Login and registration are rate-limited (see [Rate Limiting](#rate-limiting)).
 
 ### Categories
 
@@ -479,8 +482,8 @@ Base API path:
 
 | Method | Endpoint | Access |
 |---|---|---|
-| POST | `/api/v1/auth/register/` | Public |
-| POST | `/api/v1/auth/login/` | Public |
+| POST | `/api/v1/auth/register/` | Public, rate-limited (10/hour per IP) |
+| POST | `/api/v1/auth/login/` | Public, rate-limited (5/minute per IP) |
 | POST | `/api/v1/auth/token/refresh/` | Public |
 
 ### Categories
@@ -778,6 +781,60 @@ manually.
 Swagger adds the authentication scheme automatically.
 
 Do not include quotes around the token.
+
+---
+
+## Rate Limiting
+
+The two public authentication endpoints are rate-limited with Django REST Framework scoped throttling (`ScopedRateThrottle`):
+
+| Endpoint | Scope | Limit | Counted per |
+|---|---|---|---|
+| `POST /api/v1/auth/login/` | `login` | 5 requests per minute | client IP |
+| `POST /api/v1/auth/register/` | `register` | 10 requests per hour | client IP |
+
+When the limit is exceeded, the API returns:
+
+```text
+429 Too Many Requests
+Retry-After: <seconds until the next request is allowed>
+```
+
+Behavior:
+
+- Every request counts toward the limit, including failed logins and invalid registration attempts.
+- Once login is throttled, even a correct password is refused until the window resets, which blocks brute-force password guessing.
+- A throttled registration request does not create an account.
+- Throttling applies only to these two endpoints; other endpoints are not throttled and are protected by JWT authentication and role permissions.
+
+Rates are configured in `config/settings.py`:
+
+```python
+REST_FRAMEWORK = {
+    # ...
+    "DEFAULT_THROTTLE_RATES": {
+        "login": "5/min",
+        "register": "10/hour",
+    },
+}
+```
+
+Manual check (uses a nonexistent username; attempts 1–5 return `401`, attempt 6 returns `429`):
+
+```bash
+for i in 1 2 3 4 5 6; do
+  curl -s -o /dev/null -w "attempt $i: HTTP %{http_code}\n" \
+    -X POST http://127.0.0.1:8000/api/v1/auth/login/ \
+    -H "Content-Type: application/json" \
+    -d '{"username":"nobody","password":"wrong-password"}'
+done
+```
+
+Throttle counters are held in Django's default in-memory cache, so restarting the web container resets them:
+
+```bash
+docker compose restart web
+```
 
 ---
 
@@ -1080,7 +1137,7 @@ docker compose exec -T web python manage.py test --noinput
 The current verified suite contains:
 
 ```text
-137 passing tests
+141 passing tests
 ```
 
 Coverage includes:
@@ -1107,6 +1164,7 @@ Coverage includes:
 - priority ordering
 - pagination
 - Swagger/OpenAPI schema behavior
+- login and registration rate limiting
 
 ---
 
@@ -1175,6 +1233,7 @@ government-service-request-api/
     ├── test_list_queries.py
     ├── test_pagination.py
     ├── test_permissions.py
+    ├── test_rate_limiting.py
     ├── test_service_requests.py
     └── test_statistics.py
 ```
@@ -1269,6 +1328,22 @@ Comments and categories intentionally remain normal lists.
 
 ---
 
+## Bonus Features
+
+| Bonus feature | Status |
+|---|---|
+| Rate limiting | Implemented for login and registration (see [Rate Limiting](#rate-limiting)) |
+| Audit logs | Not implemented |
+| Redis | Not implemented |
+| Celery | Not implemented |
+| Email notifications | Not implemented |
+| Email verification | Not implemented |
+| Frontend UI | Not implemented |
+
+The required features were completed, tested, documented, and verified in Docker before any bonus work began. Bonus scope was then limited to what could be fully tested before the submission deadline.
+
+---
+
 ## Known Limitations
 
 ### Development Server
@@ -1330,6 +1405,14 @@ The generated OpenAPI extension pattern may appear stricter than the server beha
 
 Server-side validation remains authoritative.
 
+### Rate Limiting Scope and Storage
+
+Only login and registration are rate-limited. Authenticated endpoints such as request creation and comment posting are not throttled.
+
+Throttle counters use Django's default in-memory cache (`LocMemCache`). Counters are per process and reset when the web container restarts. A multi-server deployment should use a shared cache such as Redis.
+
+Clients are identified by IP address. Behind a reverse proxy, DRF's `NUM_PROXIES` setting would need to be configured so the real client IP is used.
+
 ### Status Workflow
 
 The project validates status values but intentionally does not implement a strict state-transition machine such as:
@@ -1368,6 +1451,7 @@ Verified items include:
 - Pagination.
 - Admin statistics.
 - Swagger/OpenAPI.
+- Login and registration rate limiting (automated tests and manual checks in Docker).
 - Docker image build.
 - Docker Compose startup.
 - PostgreSQL healthcheck.
@@ -1379,7 +1463,7 @@ Verified items include:
 Latest verified automated test result:
 
 ```text
-Ran 137 tests
+Ran 141 tests
 OK
 ```
 
