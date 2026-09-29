@@ -57,3 +57,38 @@ class LoginRateLimitTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
+
+
+
+class RegisterRateLimitTests(APITestCase):
+    """Public registration is limited to 10 requests per hour per client IP (scope "register")."""
+
+    def setUp(self):
+        cache.clear()
+        self.url = reverse("register")
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_eleventh_registration_within_an_hour_is_throttled(self):
+        # Empty bodies are enough: the throttle counts every request, valid or not.
+        for _ in range(10):
+            self.assertEqual(
+                self.client.post(self.url, {}, format="json").status_code,
+                status.HTTP_400_BAD_REQUEST,
+            )
+
+        users_before = User.objects.count()
+        response = self.client.post(
+            self.url,
+            {
+                "username": "rl_blocked",
+                "email": "rl_blocked@example.com",
+                "password": VALID_PASSWORD,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertIn("Retry-After", response.headers)
+        self.assertEqual(User.objects.count(), users_before)
